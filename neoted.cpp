@@ -4,6 +4,8 @@
 #include <termios.h>  // terminal io interface
 #include <unistd.h>   // io
 #include <iostream>
+#include <fstream>
+
 using namespace std;
 
 
@@ -19,6 +21,8 @@ struct config {
   int cursor_y;
   int screenHeight;
   int screenWidth;
+  int row_nums;
+  string row;
   struct termios termAttrOrigin;
 };
 
@@ -65,7 +69,7 @@ void enableInputMode() {
   termAttr.c_lflag &= ~(IEXTEN);  // disables control ctrl v
   termAttr.c_oflag &= ~(OPOST);   // disables carrage-return
   termAttr.c_lflag &= ~(BRKINT);  // disables SIGINT break Ctrl-c
-  tcsetattr(STDIN_FILENO, TCSAFLUSH, &termAttr);  // sets modified terminal  attributes TCSAFLUSH :Change        attributes when output has drained; alsoflush pending input.
+  tcsetattr(STDIN_FILENO, TCSAFLUSH, &termAttr);  // sets modified terminal  attributes TCSAFLUSH :Change attributes when output has drained; alsoflush pending input.
 }
 
 void moveCursor(int key) {
@@ -126,22 +130,26 @@ void handleKeyPress() {
 
 void editorDrawRows(string& buffer) {
   for (int x = 0; x < cf.screenHeight; x++) {
-    if (x == cf.screenHeight / 3) {
-      string welcomeMessage = "Welcome to Neoted!";
-      int padding = (cf.screenWidth - welcomeMessage.length()) / 2;
-      if (padding) {
-        buffer.append("~");
-        padding--;
+    if (x >= cf.row_nums) {
+      if (x == cf.screenHeight / 3) {
+        string welcomeMessage = "Welcome to Neoted!";
+        int padding = (cf.screenWidth - welcomeMessage.length()) / 2;
+        if (padding) {
+          buffer.append("~");
+          padding--;
+        }
+        while (padding--) buffer.append(" ");
+        buffer.append(welcomeMessage);
       }
-      while (padding--) buffer.append(" ");
-      buffer.append(welcomeMessage);
-
+      else {
+        buffer.append("~");
+        if (x < cf.screenHeight - 1) { //remove last \n
+          buffer.append("\r\n");
+        }
+      }
     }
     else {
-      buffer.append("~");
-      if (x < cf.screenHeight - 1) { //remove last \n
-        buffer.append("\r\n");
-      }
+      buffer.append(cf.row);
     }
   }
   buffer.append("\x1b[H");
@@ -159,12 +167,38 @@ void refreshScreen() {
   buffer = "";
 }
 
+void streamReader(istream& stream, string& line) {
+  getline(stream, line);
+}
 
-int main() {
+void openNeoted(string filename) {
+  ifstream myfile(filename);
+  string line = "";
+  if (myfile.is_open()) {
+    while (myfile.good()) {
+      streamReader(myfile, line);
+    }
+    myfile.close();
+  }
+  else {
+    exceptionExit("fread");
+  }
+  cf.row_nums = 1;
+  cf.row = line;
+}
+
+int main(int argc, char* argv[]) {
   enableInputMode();
+  if (argc >= 2) {
+    openNeoted(argv[1]);
+  }
   getWindowSize(&cf.screenHeight, &cf.screenWidth);
   cf.cursor_x = 0;
   cf.cursor_y = 0;
+  cf.row_nums = 0;
+  cf.row = "";
+
+  openNeoted("example.txt");
   while (1) {
     refreshScreen();
     handleKeyPress();
