@@ -5,6 +5,7 @@
 #include <unistd.h>   // io
 #include <iostream>
 #include <fstream>
+#include <vector>
 
 using namespace std;
 
@@ -22,7 +23,8 @@ struct config {
   int screenHeight;
   int screenWidth;
   int row_nums;
-  string row;
+  int scrollVertical;
+  vector<string> rows;
   struct termios termAttrOrigin;
 };
 
@@ -90,7 +92,7 @@ void moveCursor(int key) {
     }
     break;
   case ARROW_DOWN:
-    if (cf.cursor_y != cf.screenHeight - 1) {
+    if (cf.cursor_y < cf.row_nums) {
       cf.cursor_y++;
     }
   }
@@ -128,28 +130,41 @@ void handleKeyPress() {
   }
 }
 
+void handleVerticalScroll() {
+  if (cf.cursor_y < cf.scrollVertical) {
+    cf.scrollVertical = cf.cursor_y;
+  }
+  if (cf.cursor_y >= cf.scrollVertical + cf.screenHeight) {
+    cf.scrollVertical = cf.cursor_y - cf.screenHeight + 1;
+  }
+}
+
 void editorDrawRows(string& buffer) {
+
   for (int x = 0; x < cf.screenHeight; x++) {
-    if (x >= cf.row_nums) {
-      if (x == cf.screenHeight / 3) {
-        string welcomeMessage = "Welcome to Neoted!";
-        int padding = (cf.screenWidth - welcomeMessage.length()) / 2;
-        if (padding) {
-          buffer.append("~");
-          padding--;
+    int rowIndex = cf.scrollVertical + x;
+    if (rowIndex < cf.screenHeight + cf.scrollVertical - 1) {
+      if (x >= cf.row_nums) {
+        if (x == cf.screenHeight / 3 && cf.row_nums == 0) {
+          string welcomeMessage = "Welcome to Neoted!";
+          int padding = (cf.screenWidth - welcomeMessage.length()) / 2;
+          if (padding) {
+            buffer.append("~");
+            padding--;
+          }
+          while (padding--) buffer.append(" ");
+          buffer.append(welcomeMessage);
         }
-        while (padding--) buffer.append(" ");
-        buffer.append(welcomeMessage);
+        else {
+          buffer.append("~");
+          if (x < cf.screenHeight - 1) { //remove last \n
+            buffer.append("\r\n");
+          }
+        }
       }
       else {
-        buffer.append("~");
-        if (x < cf.screenHeight - 1) { //remove last \n
-          buffer.append("\r\n");
-        }
+        buffer.append(cf.rows[rowIndex] + to_string(rowIndex) + " " + to_string(cf.cursor_y) + " " + to_string(cf.scrollVertical) + "\n\r");
       }
-    }
-    else {
-      buffer.append(cf.row);
     }
   }
   buffer.append("\x1b[H");
@@ -157,9 +172,10 @@ void editorDrawRows(string& buffer) {
 
 void refreshScreen() {
   clearScreen();
+  handleVerticalScroll();
   string buffer = "\x1b[? 25l"; //disable cursor
   editorDrawRows(buffer);
-  string cursorPosition = "\x1b[" + to_string(cf.cursor_y) + ";" + to_string(cf.cursor_x) + "H";
+  string cursorPosition = "\x1b[" + to_string(cf.cursor_y - cf.scrollVertical) + ";" + to_string(cf.cursor_x + 1) + "H";
   buffer.append(cursorPosition);
   buffer.append("\x1b[? 25h"); //enable cursor
   const char* c = buffer.c_str(); //string to C style  char array 
@@ -171,34 +187,33 @@ void streamReader(istream& stream, string& line) {
   getline(stream, line);
 }
 
-void openNeoted(string filename) {
+void readFile(string filename) {
   ifstream myfile(filename);
-  string line = "";
+
   if (myfile.is_open()) {
     while (myfile.good()) {
+      string line = "";
       streamReader(myfile, line);
+      cf.rows.push_back(line);
+      cf.row_nums += 1;
     }
     myfile.close();
   }
   else {
     exceptionExit("fread");
   }
-  cf.row_nums = 1;
-  cf.row = line;
+  \
 }
 
 int main(int argc, char* argv[]) {
   enableInputMode();
   if (argc >= 2) {
-    openNeoted(argv[1]);
+    readFile(argv[1]);
   }
   getWindowSize(&cf.screenHeight, &cf.screenWidth);
   cf.cursor_x = 0;
   cf.cursor_y = 0;
-  cf.row_nums = 0;
-  cf.row = "";
-
-  openNeoted("example.txt");
+  cf.scrollVertical = 0;
   while (1) {
     refreshScreen();
     handleKeyPress();
