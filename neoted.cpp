@@ -6,7 +6,9 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
-
+#include<thread>
+#include <chrono>  
+#include <ext/rope>
 using namespace std;
 
 
@@ -24,6 +26,8 @@ struct config {
   int screenWidth;
   int row_nums;
   int scrollVertical;
+  int scrollHorizontal;
+  int screenRefreshLock;
   vector<string> rows;
   struct termios termAttrOrigin;
 };
@@ -45,14 +49,15 @@ void exceptionExit(char* er) {
 
 int getWindowSize(int* rows, int* cols) {
   struct winsize ws;
-  if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
-    return -1;
-  }
-  else {
-    *cols = ws.ws_col;
-    *rows = ws.ws_row;
-    return 0;
-  }
+  ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws);
+  // if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
+  //   return -1;
+  // }
+  // else {
+  *cols = ws.ws_col;
+  *rows = ws.ws_row;
+  return 0;
+// }
 }
 
 void disableRawMode() {
@@ -74,7 +79,14 @@ void enableInputMode() {
   tcsetattr(STDIN_FILENO, TCSAFLUSH, &termAttr);  // sets modified terminal  attributes TCSAFLUSH :Change attributes when output has drained; alsoflush pending input.
 }
 
+void handleCursorX() {
+  int rowIndex = cf.scrollVertical + cf.cursor_y;
+  if (cf.cursor_x > cf.rows[rowIndex].length()) cf.cursor_x = cf.rows[rowIndex].length();
+}
+
 void moveCursor(int key) {
+  int rowIndex = cf.scrollVertical + cf.cursor_y;
+
   switch (key) {
   case ARROW_LEFT:
     if (cf.cursor_x != 0) {
@@ -82,7 +94,7 @@ void moveCursor(int key) {
     }
     break;
   case ARROW_RIGHT:
-    if (cf.cursor_x != cf.screenWidth - 1) {
+    if (cf.cursor_x < cf.rows[rowIndex].length()) {
       cf.cursor_x++;
     }
     break;
@@ -96,6 +108,7 @@ void moveCursor(int key) {
       cf.cursor_y++;
     }
   }
+  handleCursorX();
 }
 
 int readKey() {
@@ -138,6 +151,14 @@ void handleVerticalScroll() {
     cf.scrollVertical = cf.cursor_y - cf.screenHeight + 1;
   }
 }
+void handleHorizontalScroll() {
+  if (cf.cursor_x < cf.scrollHorizontal) {
+    cf.scrollHorizontal = cf.cursor_x;
+  }
+  if (cf.cursor_x >= cf.scrollHorizontal + cf.screenWidth) {
+    cf.scrollHorizontal = cf.cursor_x - cf.screenWidth + 1;
+  }
+}
 
 void editorDrawRows(string& buffer) {
 
@@ -163,7 +184,13 @@ void editorDrawRows(string& buffer) {
         }
       }
       else {
-        buffer.append(cf.rows[rowIndex] + to_string(rowIndex) + " " + to_string(cf.cursor_y) + " " + to_string(cf.scrollVertical) + "\n\r");
+        int rowlength = cf.rows[rowIndex].length() - cf.scrollHorizontal;
+        int startIndex = cf.scrollHorizontal;
+        if (rowlength < 0) rowlength = 0;
+        if (rowlength > cf.screenWidth) rowlength = cf.screenWidth;
+        if (rowlength > cf.rows[rowIndex].length())rowlength = cf.rows[rowIndex].length();
+        if (startIndex > cf.rows[rowIndex].length()) startIndex = cf.rows[rowIndex].length();
+        buffer.append(cf.rows[rowIndex].substr(startIndex, rowlength )+ "\n\r");
       }
     }
   }
@@ -171,11 +198,13 @@ void editorDrawRows(string& buffer) {
 }
 
 void refreshScreen() {
-  clearScreen();
   handleVerticalScroll();
+  handleHorizontalScroll();
   string buffer = "\x1b[? 25l"; //disable cursor
+  buffer.append("\x1b[2J");
+  buffer.append("\x1b[H");
   editorDrawRows(buffer);
-  string cursorPosition = "\x1b[" + to_string(cf.cursor_y - cf.scrollVertical) + ";" + to_string(cf.cursor_x + 1) + "H";
+  string cursorPosition = "\x1b[" + to_string(cf.cursor_y - cf.scrollVertical + 1) + ";" + to_string(cf.cursor_x - cf.scrollHorizontal + 1) + "H";
   buffer.append(cursorPosition);
   buffer.append("\x1b[? 25h"); //enable cursor
   const char* c = buffer.c_str(); //string to C style  char array 
@@ -202,7 +231,16 @@ void readFile(string filename) {
   else {
     exceptionExit("fread");
   }
-  \
+
+}
+void handleScreenRefresh() {
+  while (1) {
+    if (cf.screenRefreshLock != 1) {
+      getWindowSize(&cf.screenHeight, &cf.screenWidth);
+      refreshScreen();
+    }
+    this_thread::sleep_for(chrono::seconds(3));
+  }
 }
 
 int main(int argc, char* argv[]) {
@@ -210,12 +248,17 @@ int main(int argc, char* argv[]) {
   if (argc >= 2) {
     readFile(argv[1]);
   }
-  getWindowSize(&cf.screenHeight, &cf.screenWidth);
   cf.cursor_x = 0;
   cf.cursor_y = 0;
   cf.scrollVertical = 0;
+  cf.scrollHorizontal = 0;
+  cf.screenRefreshLock = 0;
+  getWindowSize(&cf.screenHeight, &cf.screenWidth);
+  // thread refreshScreenThread(handleScreenRefresh);
   while (1) {
+    cf.screenRefreshLock = 1;
     refreshScreen();
+    cf.screenRefreshLock = 0;
     handleKeyPress();
   }  // loop to handle one byte at a time.
 
